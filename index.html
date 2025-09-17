@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>MediaPipe Hand Tracking Full Screen</title>
+  <title>MediaPipe Hand Tracking Full Screen Correct Aspect</title>
 
   <!-- MediaPipe scripts -->
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
@@ -18,20 +18,16 @@
       width: 100%;
       height: 100%;
     }
-    video {
+
+    video, canvas {
       position: absolute;
-      top: 0;
-      left: 0;
-      width: 100%;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: auto;
       height: 100%;
+      max-width: 100%;
       object-fit: cover; /* Fill screen without squishing */
-    }
-    canvas {
-      position: absolute;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
     }
   </style>
 </head>
@@ -44,14 +40,13 @@
     const canvasElement = document.getElementById("output_canvas");
     const canvasCtx = canvasElement.getContext("2d");
 
-    // Resize canvas to match video
+    // Resize canvas to match window
     function resizeCanvas() {
-      canvasElement.width = videoElement.videoWidth || window.innerWidth;
-      canvasElement.height = videoElement.videoHeight || window.innerHeight;
+      canvasElement.width = window.innerWidth;
+      canvasElement.height = window.innerHeight;
     }
-
-    videoElement.addEventListener('loadedmetadata', resizeCanvas);
     window.addEventListener("resize", resizeCanvas);
+    resizeCanvas();
 
     // Initialize MediaPipe Hands
     const hands = new Hands({
@@ -65,34 +60,62 @@
       minTrackingConfidence: 0.5,
     });
 
-    hands.onResults((results) => {
+    // Draw results with proper scaling
+    function drawResults(results) {
+      const videoWidth = videoElement.videoWidth;
+      const videoHeight = videoElement.videoHeight;
+      const canvasWidth = canvasElement.width;
+      const canvasHeight = canvasElement.height;
+
+      // Scale video to fill screen while maintaining aspect ratio
+      const scale = Math.max(canvasWidth / videoWidth, canvasHeight / videoHeight);
+      const dx = (canvasWidth - videoWidth * scale) / 2;
+      const dy = (canvasHeight - videoHeight * scale) / 2;
+
       canvasCtx.save();
-      canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+      canvasCtx.clearRect(0, 0, canvasWidth, canvasHeight);
 
       if (results.image) {
-        canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+        canvasCtx.drawImage(
+          results.image,
+          0, 0, videoWidth, videoHeight,
+          dx, dy, videoWidth * scale, videoHeight * scale
+        );
       }
 
       if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
         const landmarks = results.multiHandLandmarks[0];
 
-        drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, { color: "#00FF00", lineWidth: 3 });
-        drawLandmarks(canvasCtx, landmarks, { color: "#FF0000", lineWidth: 2 });
+        // Scale landmarks to match canvas
+        const scaledLandmarks = landmarks.map(lm => ({
+          x: lm.x * videoWidth * scale + dx,
+          y: lm.y * videoHeight * scale + dy,
+          z: lm.z
+        }));
+
+        drawConnectors(canvasCtx, scaledLandmarks, HAND_CONNECTIONS, { color: "#00FF00", lineWidth: 3 });
+        drawLandmarks(canvasCtx, scaledLandmarks, { color: "#FF0000", lineWidth: 2 });
 
         if (window.ReactNativeWebView) {
-          window.ReactNativeWebView.postMessage(JSON.stringify({ landmarks }));
-        } else {
-          console.log("Hand detected:", landmarks);
+          window.ReactNativeWebView.postMessage(JSON.stringify({ landmarks: scaledLandmarks }));
         }
       }
+
       canvasCtx.restore();
-    });
+    }
+
+    hands.onResults(drawResults);
 
     // Start camera
     async function startCamera() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
         videoElement.srcObject = stream;
+
+        videoElement.onloadedmetadata = () => {
+          videoElement.play();
+          resizeCanvas();
+        };
 
         const camera = new Camera(videoElement, {
           onFrame: async () => { await hands.send({ image: videoElement }); },
